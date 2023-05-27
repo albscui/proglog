@@ -16,7 +16,7 @@ var (
 )
 
 // index defines an index file, which comprises a file and a memory-mapped file.
-// Index entries contain two fields: the record's offset and its position int hte store file.
+// Index entries contain two fields: the record's offset and its position in the store file.
 // Store offsets as uint32, and positions as uint64, so 4 and 8 bytes respectively.
 type index struct {
 	file *os.File
