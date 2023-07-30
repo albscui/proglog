@@ -107,13 +107,32 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 }
 
 // Close iterates over the segments and closes them.
-func (l *Log) Close() error { return nil }
+func (l *Log) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, segment := range l.segments {
+		if err := segment.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Remove closes the log and then removes the data.
-func (l *Log) Remove() error { return nil }
+func (l *Log) Remove() error {
+	if err := l.Close(); err != nil {
+		return err
+	}
+	return os.RemoveAll(l.Dir)
+}
 
 // Reset removes the log and then creates a new log to replace it.
-func (l *Log) Reset() error { return nil }
+func (l *Log) Reset() error {
+	if err := l.Remove(); err != nil {
+		return err
+	}
+	return l.setup()
+}
 
 // LowestOffset returns the lowest offset. We will use this to help implement coordinated consensus.
 func (l *Log) LowestOffset() (uint64, error) {
@@ -135,10 +154,35 @@ func (l *Log) HighestOffset() (uint64, error) {
 
 // Truncate removes all segemnts whose highest offset is lower than lowest.
 // Bcause we don't have disks with infinite space, we clean up the oldest data.
-func (l *Log) Truncate(lowest uint64) error { return nil }
+func (l *Log) Truncate(lowest uint64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var keep []*segment
+	for _, segment := range l.segments {
+		if segment.nextOffset-1 <= lowest {
+			if err := segment.Remove(); err != nil {
+				return err
+			}
+			continue
+		}
+		keep = append(keep, segment)
+	}
+	l.segments = keep
+	return nil
+}
 
 // Reader returns a Reader to read the whole log.
-func (l *Log) Reader() io.Reader { return nil }
+// Concatenates all segments' stores.
+func (l *Log) Reader() io.Reader {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	readers := make([]io.Reader, len(l.segments))
+	for i, segment := range l.segments {
+		readers[i] = &originReader{store: segment.store, off: 0}
+	}
+	return io.MultiReader(readers...)
+}
 
 // The segment stoes are wrapped by originReader for two reasons:
 // 1. To satisfy io.Reader.
@@ -148,7 +192,11 @@ type originReader struct {
 	off int64
 }
 
-func (o *originReader) Read(p []byte) (int, error) { return 0, nil }
+func (o *originReader) Read(p []byte) (int, error) {
+	n, err := o.ReadAt(p, o.off)
+	o.off += int64(n)
+	return n, err
+}
 
 // Creates a new segment, appends that segment to the log's slice of segments,
 // and makes the new segment the active segment so that subsequent append calls write to it.
