@@ -104,4 +104,9 @@ func testTruncate(t *testing.T, l *Log) {
 	require.NoError(t, l.Truncate(1))
 	_, err := l.Read(0)
 	require.Error(t, err)
+	_, err = l.Read(1)
+	require.Error(t, err)
+	read, err := l.Read(2)
+	require.NoError(t, err)
+	require.Equal(t, record.Value, read.Value)
 }
