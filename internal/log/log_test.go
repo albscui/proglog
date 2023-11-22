@@ -47,7 +47,8 @@ func testAppendRead(t *testing.T, curLog *Log) {
 func testOutOfRangeErr(t *testing.T, curLog *Log) {
 	read, err := curLog.Read(1)
 	require.Nil(t, read)
-	require.ErrorContains(t, err, "offset out of range")
+	offErr := err.(*OffsetOutOfRangeError)
+	require.Equal(t, uint64(1), offErr.Offset)
 }
 
 func testInitExisting(t *testing.T, oldLog *Log) {
