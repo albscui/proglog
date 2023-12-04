@@ -13,6 +13,7 @@ type Config struct {
 	CommitLog CommitLog
 }
 
+// NewGRPCServer creates a gRPC server, and registers our service to that server.
 func NewGRPCServer(config *Config) (*grpc.Server, error) {
 	gsrv := grpc.NewServer()
 	srv, err := newgrpcServer(config)
