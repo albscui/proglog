@@ -1,4 +1,4 @@
-package server_test
+package server
 
 import (
 	"context"
@@ -8,15 +8,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
 	api "github.com/albscui/proglog/api/v1"
+	"github.com/albscui/proglog/internal/auth"
+	"github.com/albscui/proglog/internal/config"
 	"github.com/albscui/proglog/internal/log"
-	"github.com/albscui/proglog/internal/server"
 )
 
-type testCase func(*testing.T, api.LogClient, *server.Config)
+type testCase func(*testing.T, api.LogClient, api.LogClient, *Config)
 
 // TestServer defines all test cases and runs a subtest for each.
 func TestServer(t *testing.T) {
@@ -24,27 +26,61 @@ func TestServer(t *testing.T) {
 		"produce/consume a message to/from the log succeeds": testProduceConsume,
 		"produce/consume stream succeeds":                    testProduceConsumeStream,
 		"consume past log boundary fails":                    testConsumePastBoundary,
+		"unauthorized":                                       testUnauthorized,
 	} {
 		t.Run(name, func(t *testing.T) {
-			client, config, teardown := setupTest(t)
+			rootClient, nobodyClient, config, teardown := setupTest(t)
 			defer teardown()
-			test(t, client, config)
+			test(t, rootClient, nobodyClient, config)
 		})
 	}
 }
 
 // setupTest creates the client and runs the server locally.
-func setupTest(t *testing.T) (client api.LogClient, config *server.Config, teardown func()) {
+func setupTest(t *testing.T) (rootClient api.LogClient, nobodyClient api.LogClient, cfg *Config, teardown func()) {
 	t.Helper()
-
 	// Create a listener on the local network address that our server will run on.
 	// The 0 port will automatically assign us a free port.
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	// Create an insecure connection to our listener, which will be used by our client.
-	cc, err := grpc.Dial(l.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// helper function to create multiple clients
+	newClient := func(crtPath, keyPath string) (*grpc.ClientConn, api.LogClient, []grpc.DialOption) {
+		// Configure our client's TLS credentials to use our CA as the client's Root CA (the CA it will use to verify the server).
+		tlsConfig, err := config.SetupTLSConfig(config.TLSConfig{
+			CertFile: crtPath,
+			KeyFile:  keyPath,
+			CAFile:   config.CAFile,
+			Server:   false,
+		})
+		require.NoError(t, err)
+		tlsCreds := credentials.NewTLS(tlsConfig)
+		opts := []grpc.DialOption{grpc.WithTransportCredentials(tlsCreds)}
+		conn, err := grpc.Dial(l.Addr().String(), opts...)
+		require.NoError(t, err)
+		client := api.NewLogClient(conn)
+		return conn, client, opts
+	}
+
+	var rootConn *grpc.ClientConn
+	rootConn, rootClient, _ = newClient(config.RootClientCertFile, config.RootClientKeyFile)
+
+	var nobodyConn *grpc.ClientConn
+	nobodyConn, nobodyClient, _ = newClient(config.NobodyClientCertFile, config.NobodyClientKeyFile)
+
+	// Hook up our server with its certificate and enable it to handle TLS connections.
+	serverTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
+		CertFile:      config.ServerCertFile,
+		KeyFile:       config.ServerKeyFile,
+		CAFile:        config.CAFile,
+		ServerAddress: l.Addr().String(),
+		Server:        true,
+	})
 	require.NoError(t, err)
+	serverCreds := credentials.NewTLS(serverTLSConfig)
+
+	// serverCreds, err := credentials.NewServerTLSFromFile(config.ServerCertFile, config.ServerKeyFile)
+	// require.NoError(t, err)
 
 	// Create our server and start serving requests in a goroutine.
 	dir, err := os.MkdirTemp("", "server-test")
@@ -53,18 +89,26 @@ func setupTest(t *testing.T) (client api.LogClient, config *server.Config, teard
 	clog, err := log.NewLog(dir, log.Config{})
 	require.NoError(t, err)
 
-	config = &server.Config{CommitLog: clog}
-	gsrv, err := server.NewGRPCServer(config)
+	// Auth
+	authorizer := auth.New(config.ACLModelFile, config.ACLPolicyFile)
+
+	cfg = &Config{
+		CommitLog:  clog,
+		Authorizer: authorizer,
+	}
+	gsrv, err := NewGRPCServer(cfg, grpc.Creds(serverCreds))
 	require.NoError(t, err)
 
 	// non-blocking
-	go gsrv.Serve(l)
-
-	client = api.NewLogClient(cc)
+	go func() {
+		err := gsrv.Serve(l)
+		require.NoError(t, err)
+	}()
 
 	teardown = func() {
 		gsrv.Stop()
-		cc.Close()
+		rootConn.Close()
+		nobodyConn.Close()
 		l.Close()
 		clog.Remove()
 	}
@@ -73,7 +117,7 @@ func setupTest(t *testing.T) (client api.LogClient, config *server.Config, teard
 
 // tests that producing and consuming works by using our client and server to produce a redord to the log,
 // consume it back, and then check the record we sent is the same one we got back.
-func testProduceConsume(t *testing.T, client api.LogClient, _ *server.Config) {
+func testProduceConsume(t *testing.T, client, _ api.LogClient, _ *Config) {
 	ctx := context.Background()
 
 	want := &api.Record{Value: []byte("hello world")}
@@ -88,7 +132,7 @@ func testProduceConsume(t *testing.T, client api.LogClient, _ *server.Config) {
 }
 
 // tests that our server responds with an api.ErrOffsetOutOfRange error when a client tries to consume beyong the log's boundaries.
-func testConsumePastBoundary(t *testing.T, client api.LogClient, _ *server.Config) {
+func testConsumePastBoundary(t *testing.T, client, _ api.LogClient, _ *Config) {
 	ctx := context.Background()
 
 	produce, err := client.Produce(ctx, &api.ProduceRequest{Record: &api.Record{Value: []byte("hello world")}})
@@ -107,7 +151,7 @@ func testConsumePastBoundary(t *testing.T, client api.LogClient, _ *server.Confi
 }
 
 // testProduceConsumeStream tests whether we can produce and consume through stream.
-func testProduceConsumeStream(t *testing.T, client api.LogClient, _ *server.Config) {
+func testProduceConsumeStream(t *testing.T, client, _ api.LogClient, _ *Config) {
 	ctx := context.Background()
 
 	records := []*api.Record{
@@ -134,5 +178,38 @@ func testProduceConsumeStream(t *testing.T, client api.LogClient, _ *server.Conf
 		res, err := consumeStream.Recv()
 		require.NoError(t, err)
 		require.Equal(t, res.Record, &api.Record{Value: record.Value, Offset: uint64(i)})
+	}
+}
+
+func testUnauthorized(
+	t *testing.T,
+	_,
+	client api.LogClient,
+	config *Config,
+) {
+	ctx := context.Background()
+	produce, err := client.Produce(ctx,
+		&api.ProduceRequest{
+			Record: &api.Record{
+				Value: []byte("hello world"),
+			},
+		},
+	)
+	if produce != nil {
+		t.Fatalf("produce response should be nil")
+	}
+	gotCode, wantCode := status.Code(err), codes.PermissionDenied
+	if gotCode != wantCode {
+		t.Fatalf("got code: %d, want: %d", gotCode, wantCode)
+	}
+	consume, err := client.Consume(ctx, &api.ConsumeRequest{
+		Offset: 0,
+	})
+	if consume != nil {
+		t.Fatalf("consume response should be nil")
+	}
+	gotCode, wantCode = status.Code(err), codes.PermissionDenied
+	if gotCode != wantCode {
+		t.Fatalf("got code: %d, want: %d", gotCode, wantCode)
 	}
 }

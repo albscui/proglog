@@ -6,16 +6,39 @@ import (
 
 	api "github.com/albscui/proglog/api/v1"
 	"github.com/albscui/proglog/internal/log"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 type Config struct {
-	CommitLog CommitLog
+	CommitLog  CommitLog
+	Authorizer Authorizer
 }
 
+const (
+	objectWildcard = "*"
+	produceAction  = "produce"
+	consumeAction  = "consume"
+)
+
 // NewGRPCServer creates a gRPC server, and registers our service to that server.
-func NewGRPCServer(config *Config) (*grpc.Server, error) {
-	gsrv := grpc.NewServer()
+func NewGRPCServer(config *Config, opts ...grpc.ServerOption) (*grpc.Server, error) {
+	opts = append(opts,
+		grpc.StreamInterceptor(
+			grpc_middleware.ChainStreamServer(
+				grpc_auth.StreamServerInterceptor(authenticate),
+			)),
+		grpc.UnaryInterceptor(
+			grpc_middleware.ChainUnaryServer(
+				grpc_auth.UnaryServerInterceptor(authenticate),
+			)),
+	)
+	gsrv := grpc.NewServer(opts...)
 	srv, err := newgrpcServer(config)
 	if err != nil {
 		return nil, err
@@ -38,6 +61,9 @@ func newgrpcServer(config *Config) (srv *grpcServer, err error) {
 
 // Produce implements LogServer.Produce
 func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (*api.ProduceResponse, error) {
+	if err := s.Authorizer.Authorize(subject(ctx), objectWildcard, produceAction); err != nil {
+		return nil, err
+	}
 	offset, err := s.CommitLog.Append(req.Record)
 	if err != nil {
 		return nil, err
@@ -47,6 +73,9 @@ func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (*api
 
 // Consume implements LogServer.Consume
 func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (*api.ConsumeResponse, error) {
+	if err := s.Authorizer.Authorize(subject(ctx), objectWildcard, consumeAction); err != nil {
+		return nil, err
+	}
 	record, err := s.CommitLog.Read(req.Offset)
 	if err != nil {
 		if offErr, ok := err.(*log.OffsetOutOfRangeError); ok {
@@ -99,7 +128,35 @@ func (s *grpcServer) ConsumeStream(req *api.ConsumeRequest, stream api.Log_Consu
 	}
 }
 
+// authenticate middleware reads the subject out of the client's cert and writes it to the RPC's context.
+func authenticate(ctx context.Context) (context.Context, error) {
+	peer, ok := peer.FromContext(ctx)
+	if !ok {
+		return ctx, status.New(codes.Unknown, "couldn't find peer info").Err()
+	}
+
+	if peer.AuthInfo == nil {
+		return context.WithValue(ctx, subjectContextKey{}, ""), nil
+	}
+
+	tlsInfo := peer.AuthInfo.(credentials.TLSInfo)
+	subject := tlsInfo.State.VerifiedChains[0][0].Subject.CommonName
+	ctx = context.WithValue(ctx, subjectContextKey{}, subject)
+
+	return ctx, nil
+}
+
+func subject(ctx context.Context) string {
+	return ctx.Value(subjectContextKey{}).(string)
+}
+
+type subjectContextKey struct{}
+
 type CommitLog interface {
 	Append(*api.Record) (uint64, error)
 	Read(uint64) (*api.Record, error)
+}
+
+type Authorizer interface {
+	Authorize(subject, object, action string) error
 }
