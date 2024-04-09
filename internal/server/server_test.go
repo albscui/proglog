@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"flag"
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opencensus.io/examples/exporter"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -18,7 +22,21 @@ import (
 	"github.com/albscui/proglog/internal/log"
 )
 
-type testCase func(*testing.T, api.LogClient, api.LogClient, *Config)
+var debug = flag.Bool("debug", false, "Enable observability for debugging.")
+
+// Go will run TestMain instead of running tests directly.
+// TestMain gives us a place for setup that applies to all tests in this file.
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *debug {
+		logger, err := zap.NewDevelopment()
+		if err != nil {
+			panic(err)
+		}
+		zap.ReplaceGlobals(logger)
+	}
+	os.Exit(m.Run())
+}
 
 // TestServer defines all test cases and runs a subtest for each.
 func TestServer(t *testing.T) {
@@ -92,6 +110,27 @@ func setupTest(t *testing.T) (rootClient api.LogClient, nobodyClient api.LogClie
 	// Auth
 	authorizer := auth.New(config.ACLModelFile, config.ACLPolicyFile)
 
+	// Starts the telemetry exporter to write to two files.
+	var telemetryExporter *exporter.LogExporter
+	if *debug {
+		metricsLogFile, err := os.CreateTemp("", "metrics-*.log")
+		require.NoError(t, err)
+		t.Logf("metrics log file: %s", metricsLogFile.Name())
+
+		tracesLogFile, err := os.CreateTemp("", "traces-*.log")
+		require.NoError(t, err)
+		t.Logf("traces log file: %s", tracesLogFile.Name())
+
+		telemetryExporter, err = exporter.NewLogExporter(exporter.Options{
+			MetricsLogFile:    metricsLogFile.Name(),
+			TracesLogFile:     tracesLogFile.Name(),
+			ReportingInterval: time.Second,
+		})
+		require.NoError(t, err)
+		err = telemetryExporter.Start()
+		require.NoError(t, err)
+	}
+
 	cfg = &Config{
 		CommitLog:  clog,
 		Authorizer: authorizer,
@@ -111,6 +150,12 @@ func setupTest(t *testing.T) (rootClient api.LogClient, nobodyClient api.LogClie
 		nobodyConn.Close()
 		l.Close()
 		clog.Remove()
+		if telemetryExporter != nil {
+			// sleep for 1.5 secs to give the telemetry exporter enough time to flush its data to disk.
+			time.Sleep(1500 * time.Millisecond)
+			telemetryExporter.Stop()
+			telemetryExporter.Close()
+		}
 	}
 	return
 }
@@ -213,3 +258,5 @@ func testUnauthorized(
 		t.Fatalf("got code: %d, want: %d", gotCode, wantCode)
 	}
 }
+
+type testCase func(*testing.T, api.LogClient, api.LogClient, *Config)
