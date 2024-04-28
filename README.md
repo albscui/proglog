@@ -99,3 +99,12 @@ To implement service discovery with Serf we need to:
 1. Configure each Serf node with an address to listen on and accept connections from other Serf nodes.
 1. Configure each Serf node with addresses of other Serf nodes and join their cluster.
 1. Handle Serf's cluster discovery events, such as when a node joins or fails in the cluster.
+
+
+## Replication
+
+Discovery alone isn't useful. Discovery events trigger other processes in our service like replication and consensus. When servers discover other servers, we want to trigger the servers to replicate. We need a component in our service that handles when a server joins (or leaves) the cluster and begins (or ends) replicating from it.
+
+Our replication will be pull-based, with the replication component consuming from each discovered server and producing a copy to the local server. In pull-based replication, the consumer periodically polls the data source to check if it has new data to consume. In push-based replication, the ata source pushes the data to its replicas.
+
+We will build a component that acts as a membership handler handling When a server joins the cluster. When a server joins the cluster, the component will connect to the server and run a loop that consumes from the discovered server and produces to the local server.

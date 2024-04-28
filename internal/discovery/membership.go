@@ -30,8 +30,11 @@ func New(handler Handler, config Config) (*Membership, error) {
 
 type Config struct {
 	// NodeName acts as the node's unique identifier
-	NodeName       string
-	BindAddrr      string
+	NodeName string
+	// Serf listens on this address and port for gossiping
+	BindAddrr string
+	// Serf shares these tags to the other nodes in the cluster and should use these tags
+	// for simple data that informs the cluster how to handle this node.
 	Tags           map[string]string
 	StartJoinAddrs []string
 }

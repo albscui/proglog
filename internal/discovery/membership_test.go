@@ -25,7 +25,10 @@ func TestMembership(t *testing.T) {
 	require.NoError(t, m[2].Leave())
 
 	require.Eventually(t, func() bool {
-		return len(handler.joins) == 2 && len(m[0].Members()) == 3 && serf.StatusLeft == m[0].Members()[2].Status && len(handler.leaves) == 1
+		return len(handler.joins) == 2 &&
+			len(m[0].Members()) == 3 &&
+			serf.StatusLeft == m[0].Members()[2].Status &&
+			len(handler.leaves) == 1
 	}, 3*time.Second, 250*time.Millisecond)
 
 	require.Equal(t, fmt.Sprintf("%d", 2), <-handler.leaves)
