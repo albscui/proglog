@@ -1,10 +1,12 @@
 package log
 
-import "fmt"
+import (
+	"fmt"
 
-type OffsetOutOfRangeError struct {
-	Offset uint64
-}
+	api "github.com/albscui/proglog/api/v1"
+)
+
+type OffsetOutOfRangeError api.OffsetOutOfRangeError
 
 func (err *OffsetOutOfRangeError) Error() string {
 	return fmt.Sprintf("offset out of range: %d", err.Offset)

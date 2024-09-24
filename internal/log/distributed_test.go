@@ -12,6 +12,7 @@ import (
 	api "github.com/albscui/proglog/api/v1"
 	"github.com/albscui/proglog/internal/log"
 	"github.com/hashicorp/raft"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/travisjeffery/go-dynaport"
 )
@@ -95,8 +96,8 @@ func TestMultipleNodes(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	record, err := logs[1].Read(off)
-	require.True(t, errors.As(err, new(*api.OffsetOutOfRangeError)))
-	require.IsType(t, api.OffsetOutOfRangeError{}, err)
+	assert.True(t, errors.As(err, new(*log.OffsetOutOfRangeError)))
+	require.IsType(t, &log.OffsetOutOfRangeError{}, err)
 	require.Nil(t, record)
 
 	record, err = logs[2].Read(off)
