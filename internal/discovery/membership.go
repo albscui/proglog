@@ -1,8 +1,10 @@
 package discovery
 
 import (
+	"errors"
 	"net"
 
+	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
 	"go.uber.org/zap"
 )
@@ -124,7 +126,11 @@ func (m *Membership) Leave() error {
 
 // LogError logs the given error and message.
 func (m *Membership) LogError(err error, msg string, member serf.Member) {
-	m.logger.Error(msg, zap.Error(err), zap.String("name", member.Name), zap.String("rpc_addr", member.Tags["rpc_addr"]))
+	log := m.logger.Error
+	if errors.Is(err, raft.ErrNotLeader) {
+		log = m.logger.Debug
+	}
+	log(msg, zap.Error(err), zap.String("name", member.Name), zap.String("rpc_addr", member.Tags["rpc_addr"]))
 }
 
 // Handler represents some component in our service that needs to know when a server joins or leaves the cluster.
