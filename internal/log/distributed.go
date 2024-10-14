@@ -12,6 +12,7 @@ import (
 	"time"
 
 	api "github.com/albscui/proglog/api/v1"
+	"github.com/albscui/proglog/internal/discovery"
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 	"google.golang.org/protobuf/proto"
@@ -195,6 +196,8 @@ func (l *DistributedLog) Read(offset uint64) (*api.Record, error) {
 
 // Discovery Integration - implement membership.Handler interface.
 
+var _ discovery.Handler = (*DistributedLog)(nil)
+
 // Join adds the server to the Raft cluster. Every server is added as a voter.
 func (l *DistributedLog) Join(id, addr string) error {
 	configFuture := l.raft.GetConfiguration()
@@ -255,7 +258,8 @@ func (l *DistributedLog) Close() error {
 	return l.log.Close()
 }
 
-var _ raft.FSM = &fsm{}
+// Compile-time check to see if fsm implements FSM
+var _ raft.FSM = (*fsm)(nil)
 
 // fsm implements the raft.FSM interface
 type fsm struct {
@@ -338,7 +342,7 @@ func (m *fsm) Restore(snapshot io.ReadCloser) error {
 	return nil
 }
 
-var _ raft.FSMSnapshot = &snapshot{}
+var _ raft.FSMSnapshot = (*snapshot)(nil)
 
 // snapshot implements raft.FSMSnapshot
 type snapshot struct {
@@ -360,7 +364,7 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 // Release -- Raft calls this when it's finished with the snapshot.
 func (s *snapshot) Release() {}
 
-var _ raft.LogStore = &logStore{}
+var _ raft.LogStore = (*logStore)(nil)
 
 // logStore wraps our Log, and implements raft.LogStore.
 // Raft stores its internal log here.
