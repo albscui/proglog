@@ -11,7 +11,7 @@ Based on the book [Distributed Services with Go by Travis Jeffery](https://githu
 - [x] Secure Your Services
 - [x] Observe Your System
 - [x] Server-to-server Service Discovery
-- [ ] Coordinate Your Services with Consensus
+- [x] Coordinate Your Services with Consensus
 - [ ] Discover Servers and Load Balance from the Client
 - [ ] Deploy with Kubernetes Locally
 - [ ] Deploy with Kubernetes to the Cloud
@@ -142,3 +142,9 @@ Every Raft server has a term: a monotonically increasing integer that tells othe
 The leader accepts client requests, each of which represents some command to run across the cluster. (In a key-value service for example, you'd have a command to assign a key's value). For each request, the leader appends the command to its log and then requests its followers to append the command to their logs. After a majority of followers have replicated the command -- when the leader considers the command committed -- the leader executes the command with a finite-state machine and responds to the client with the result. The leader tracks the highest committed offset and sends this in the requests to the followers. When a follower receives a request, it executes all commands up to the highest committed offset with its finite-state machine. All Raft servers run the same FSM that defines how to handle each command.
 
 The recommended number of servers is 3 and five. The general formula is `N = 2f + 1`, where `N` is the number of servers, and `f` is the number of failures to tolerate.
+
+### Multiplex to Run Multiple services on one port
+
+We have two connection types (Raft and gRPC) for our distributed log and gRPC server respectively. We want to multiplex the Raft service with our gRPC service on one port. The issue with multiplexing before the handhsake and mutual TLS gRPC connections is that gRPC needs information taken during the handshake to authenticate clients later on. We need to multiplex before the handshake and identify Raft vs gRPC connections.
+
+We identify the Raft connection by making the Raft connection write a a `1` as the first byte.

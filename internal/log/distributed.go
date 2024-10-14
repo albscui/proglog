@@ -421,7 +421,7 @@ func (l *logStore) DeleteRange(min, max uint64) error {
 var _ raft.StreamLayer = (*StreamLayer)(nil)
 
 // StreamLayer implements Raft's StreamLayer.
-// Raft uses a stream layer in the transport to provide low-level stream abstration to connection with Raft servers.
+// Raft uses a stream layer in the transport to provide low-level stream abstration to connect with Raft servers.
 type StreamLayer struct {
 	ln              net.Listener
 	serverTLSConfig *tls.Config // for accepting incoming connections

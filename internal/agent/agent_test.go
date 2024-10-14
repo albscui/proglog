@@ -13,6 +13,7 @@ import (
 	"github.com/travisjeffery/go-dynaport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 
 	api "github.com/albscui/proglog/api/v1"
 	"github.com/albscui/proglog/internal/agent"
@@ -54,6 +55,7 @@ func TestAgent(t *testing.T) {
 		}
 
 		agent, err := agent.New(agent.Config{
+			Bootstrap:       i == 0,
 			NodeName:        fmt.Sprintf("%d", i),
 			StartJoinAddrs:  startJoinAddrs,
 			BindAddr:        bindAddr,
@@ -75,6 +77,7 @@ func TestAgent(t *testing.T) {
 		}
 	}()
 	// Wait for servers to discover each other.
+	t.Log("Sleeping for 3 sec for servers to discover each other")
 	time.Sleep(3 * time.Second)
 
 	// Create a log record via the leader.
@@ -93,6 +96,7 @@ func TestAgent(t *testing.T) {
 	require.Equal(t, []byte("foo"), consumeResponse.Record.Value)
 
 	// Verify that the replicators have replicated our log via the leader.
+	t.Log("Sleeping for 3 sec to wait for followers to replicate the log.")
 	time.Sleep(3 * time.Second)
 
 	for i := 1; i < 3; i++ {
@@ -104,6 +108,17 @@ func TestAgent(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte("foo"), consumeResponse.Record.Value)
 	}
+
+	// Verify that the leader doesn't replicate the followers.
+	consumeResponse, err = leaderClient.Consume(
+		context.Background(),
+		&api.ConsumeRequest{Offset: produceResponse.Offset + 1},
+	)
+	require.Nil(t, consumeResponse)
+	require.Error(t, err)
+	got := status.Code(err)
+	want := status.Code(api.OffsetOutOfRangeError{}.GRPCStatus().Err())
+	require.Equal(t, want, got)
 }
 
 func client(t *testing.T, agent *agent.Agent, tlsConfig *tls.Config) api.LogClient {
